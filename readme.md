@@ -53,7 +53,7 @@ rule = [
     }
 ]
 ```
-The previous example searches for the (exact) pattern $\left[ a, a, b \right]$ (due to the '=' operator) where the first two symbols appear in series $0$, $0$, and $2$ respectively. 
+The previous example searches for the (exact) pattern $\left[ a, a, b \right]$ (due to the '=' operator) where the symbols appear in series $0$, $0$, and $2$ respectively. 
 The gap between the first and second symbols is at least $1$ and at most $1$, and the gap between the second and the third symbol is at least $0$ and at most $1$.
 
 A NetTree can be built with:

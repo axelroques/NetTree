@@ -80,9 +80,9 @@ class NetTree:
                 f'Invalid operator type in subrule {subrule}. The operator should be a string.'
             )
         if 'gap' in subrule:
-            if not (isinstance(subrule['gap'], tuple) and all(isinstance(x, int) for x in subrule['gap'])):
+            if not (isinstance(subrule['gap'], tuple) and all(isinstance(x, (int, float)) for x in subrule['gap'])):
                 raise RuntimeError(
-                    f'Invalid gap type in subrule {subrule}. Expected tuple(int, int).'
+                    f'Invalid gap type in subrule {subrule}. Expected tuple(int/float, int/float).'
                 )
         # Default gap value
         if not 'gap' in subrule:
