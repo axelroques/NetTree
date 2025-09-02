@@ -1,10 +1,12 @@
 
 class Node:
 
-    def __init__(self, pos, predecessor=None) -> None:
+    def __init__(self, symbol, pos, gap, predecessor=None) -> None:
 
         # Input parameters
+        self._symbol = symbol
         self._pos = pos
+        self._gap = gap
         self._predecessor = predecessor
 
         # Other params
@@ -12,9 +14,17 @@ class Node:
         self._path = 0
 
     @property
+    def symbol(self):
+        return self._symbol
+    
+    @property
     def pos(self):
         return self._pos
 
+    @property
+    def gap(self):
+        return self._gap
+    
     @property
     def predecessor(self):
         return self._predecessor
@@ -42,4 +52,4 @@ class Node:
         self._path = path
 
     def __repr__(self) -> str:
-        return f'Node: {self._pos}'
+        return f'Node {self._pos}: {self._symbol}'

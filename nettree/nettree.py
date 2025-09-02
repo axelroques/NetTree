@@ -1,46 +1,137 @@
 
 from .plot import plot_patterns
+from .symbol import Symbol
 from .level import Level
 from .node import Node
+import numpy as np
 
 
 class NetTree:
 
-    def __init__(self, data, pattern, max_gap=2) -> None:
+    def __init__(self, data, rule) -> None:
 
         # Store inputs
-        self.data = data
-        self.pattern = pattern
-        self.max_gap = max_gap
+        self._raw_data = data
+        self.rule = rule
+
+        # Preprocess data
+        self._preprocess()
 
         # Instantiate tree levels
-        self._levels = [Level() for _ in range(len(pattern))]
+        self._levels = [Level() for _ in range(len(rule))]
 
         # Initialize empty patterns variable
         self._patterns = []
+
+    def _preprocess(self):
+        """ 
+        Convert input into a valid format.
+        """
+
+        # Check that rule columns are in the data
+        if not set(r['series'] for r in self.rule).issubset(set(self._raw_data.columns)):
+            raise RuntimeError(
+                'Rule is invalid: all pattern columns are not contained in the data.'
+            )
+        
+        # Check subrule validity
+        for subrule in self.rule:
+            self._subrule_check(subrule)
+
+        # Check whether the data contains temporal information
+        if not 't' in self._raw_data.columns:
+            self._raw_data['t'] = np.arange(len(self._raw_data))
+
+        # Create input array
+        self.series_labels = [c for c in self._raw_data.columns if c != 't']
+        self.data = np.empty((len(self.series_labels), len(self._raw_data)), dtype=object)
+        for i_row in range(len(self._raw_data[:-1])):
+            for i_col, col in enumerate(self.series_labels):
+                symbol = self._raw_data.iloc[i_row, i_col]
+                t = (
+                    self._raw_data.loc[i_row, 't'],
+                    self._raw_data.loc[i_row+1, 't']
+                )
+                symbol = Symbol(symbol, col, t)
+                self.data[i_col, i_row] = symbol
+
+        # Last slice
+        for i_col, col in enumerate(self.series_labels):
+            symbol = self._raw_data.iloc[i_row+1, i_col]
+            t = (
+                self._raw_data.loc[i_row+1, 't'],
+                self._raw_data.loc[i_row+1, 't']
+            )
+            symbol = Symbol(symbol, col, t)
+            self.data[i_col, -1] = symbol
+
+    def _subrule_check(self, subrule):
+        """
+        Check sub-rule validity. 
+        """
+
+        # Check content of the rule for this column
+        if not set(['symbol', 'series', 'op']).issubset(set(subrule.keys())):
+            raise RuntimeError(
+                f"Invalid keys in subrule {subrule}. Minimum expected keys: 'symbol', 'series', 'op'."
+            )
+        if not isinstance(subrule['op'], str):
+            raise RuntimeError(
+                f'Invalid operator type in subrule {subrule}. The operator should be a string.'
+            )
+        if 'gap' in subrule:
+            if not (isinstance(subrule['gap'], tuple) and all(isinstance(x, int) for x in subrule['gap'])):
+                raise RuntimeError(
+                    f'Invalid gap type in subrule {subrule}. Expected tuple(int, int).'
+                )
+        # Default gap value
+        if not 'gap' in subrule:
+            subrule['gap'] = (0, 1)
 
     def build(self):
         """
         Build the NetTree.
         """
+        print('data =', self.data)
+        
+        # Iterate over the input sequence, one slice at a time
+        for i_slice, slice in enumerate(self.data.T):
+            print('\n\n\t i_slice =', i_slice, '; slice =', slice)
+            t_slice = self._raw_data.loc[i_slice, 't']
 
-        # Iterate over the input sequence
-        for i_col, column in enumerate(self.data.T):
+            # Iterate over the subrules in the pattern
+            for i_subrule, subrule in enumerate(self.rule):
+                
+                # Get subrule info
+                rule_symbol = subrule['symbol']
+                rule_series = subrule['series']
+                rule_op = subrule['op']
+                rule_gap = subrule['gap']
 
-            print('\n\n\t i_col =', i_col, '; column =', column)
+                # Get slice symbol
+                i_slice_symb = self.series_labels.index(rule_series)
+                slice_symbol = slice[i_slice_symb]
 
-            # Iterate over the symbols in the pattern
-            for i_symbol, symbol in enumerate(self.pattern):
+                # NaN check
+                try:
+                    slice_symbol.symbol
+                except AttributeError:
+                    continue
 
-                print('\t\t symbol =', symbol)
+                # Check subrule
+                if not self._check_subrule(slice_symbol, rule_symbol, rule_op):
+                    continue
 
-                # If one symbol in the column matches the first symbol
-                # in the pattern
-                if (i_symbol == 0) and (symbol in column):
+                #############################
+                # If it's the first subrule #
+                #############################
+                if i_subrule == 0:
 
                     # Add a root note
                     node = Node(
-                        pos=(int(symbol[-1]), i_col),
+                        symbol=slice_symbol,
+                        pos=(i_slice, i_slice_symb),
+                        gap=rule_gap,
                         predecessor=self._levels[0].tail
                     )
                     print('\t\t --> Adding root node:', node)
@@ -61,68 +152,82 @@ class NetTree:
 
                     # Move on to the next symbol
                     continue
+                
+                #########################
+                # Subrule number is > 1 #
+                #########################
+                # Get the first possible start node  at the
+                # (i_symbol-1)th level
+                start_nodes = self._levels[i_subrule-1].start
 
-                # If one symbol in the column matches any symbol in the pattern
-                # excepted for the first symbol
-                if (i_symbol != 0) and (symbol in column):
+                # Check constraints
+                start_node = None
+                # Start nodes are iterated in inverse order because we explore
+                # the predecessors of the start node when creating parent-child
+                # relationships
+                for node in start_nodes[::-1]:
+                    if self._gap_check(t_slice, node):
+                        start_node = node
+                        break
 
-                    # Get the first possible start node  at the
-                    # (i_symbol-1)th level
-                    start_nodes = self._levels[i_symbol-1].start
+                # If constraints are not met, move on to the next symbol
+                if not start_node:
+                    continue
 
-                    # Check constraints
-                    start_node = None
-                    # Start nodes are iterated in inverse order because we explore
-                    # the predecessors of the start node when creating parent-child
-                    # relationships
-                    for node in start_nodes[::-1]:
-                        dist = i_col - node.pos[1] - 1
+                # Otherwise, create a new node
+                node = Node(
+                    symbol=slice_symbol,
+                    pos=(i_slice, i_slice_symb),
+                    gap=rule_gap,
+                    predecessor=self._levels[i_subrule].tail
+                )
+                print(f'\t\t --> Adding node {node} at level {i_subrule}')
+                self._levels[i_subrule].add_node(node)
 
-                        if (0 <= dist) and (dist <= self.max_gap):
-                            start_node = node
-                            break
+                # Update tail node on level i_symbol
+                self._levels[i_subrule].tail = node
 
-                    # If constraints are not met, move on to the next symbol
-                    if not start_node:
-                        continue
+                # Update start nodes in level i_symbol-1
+                self._levels[i_subrule-1].update_start([
+                    n for n in self._levels[i_subrule-1].start
+                    if n != start_node
+                ]) # Might be an issue here?
 
-                    # Otherwise, create a new node
-                    node = Node(
-                        pos=(int(symbol[-1]), i_col),
-                        predecessor=self._levels[i_symbol].tail
-                    )
-                    print(f'\t\t --> Adding node {node} at level {i_symbol}')
-                    self._levels[i_symbol].add_node(node)
+                # Update start nodes in level i_symbol
+                self._levels[i_subrule].start = node
 
-                    # Update tail node on level i_symbol
-                    self._levels[i_symbol].tail = node
+                # Add parent-child relationship
+                parent = start_node
+                while (parent) and self._gap_check(t_slice, parent):
+                    print(
+                        f'\t\t --> Adding relationship: {parent} -> {node}')
 
-                    # Update start nodes in level i_symbol-1
-                    self._levels[i_symbol-1].update_start([
-                        n for n in self._levels[i_symbol-1].start
-                        if n != start_node
-                    ])
+                    # Add parent to the new node
+                    node.parents = parent
 
-                    # Update start nodes in level i_symbol
-                    self._levels[i_symbol].start = node
+                    # Also add path info to the new node
+                    node.path += parent.path
 
-                    # Add parent-child relationship
-                    parent = start_node
-                    while (parent) and \
-                        (0 <= i_col-parent.pos[1]-1) and \
-                            (i_col-parent.pos[1]-1 <= self.max_gap):
+                    # Check predecessor of parent
+                    parent = parent.predecessor
 
-                        print(
-                            f'\t\t --> Adding relationship: {parent} -> {node}')
-
-                        # Add parent to the new node
-                        node.parents = parent
-
-                        # Also add path info to the new node
-                        node.path += parent.path
-
-                        # Check predecessor of parent
-                        parent = parent.predecessor
+    def _check_subrule(self, slice_symbol, rule_symbol, op):
+        """
+        Check if the subrule criterion is met for one of the symbols
+        in the column.
+        """
+        # print('\t\t\t Criterion =', symbol._operator[op](val))
+        return slice_symbol._operator[op](rule_symbol)
+    
+    @staticmethod
+    def _gap_check(t_slice, node):
+        """ 
+        Check whether the distance between the node and the slice respects
+        the gap constraints.
+        """
+        dist = t_slice - node.symbol.t[0]
+        print('DIST', dist)
+        return (node.gap[0] <= dist) and (dist <= node.gap[1])
 
     @property
     def occurrences(self):
@@ -142,9 +247,6 @@ class NetTree:
         order, otherwise some parents may be marked as visited and 
         therefore not explored during the next iterations. 
         """
-
-        # TO BE REMOVED
-        self._patterns = []
 
         def DFS(node, visited=[], paths=[], stack=[]):
             """
@@ -188,10 +290,10 @@ class NetTree:
 
         return self._patterns
 
-    def plot(self, i_pattern=0, show_symbols=True):
+    def plot(self, i_pattern=0, show_symbols=False):
         """
         Plot patterns in the input data. 
         """
         plot_patterns(
-            self.data, self._patterns, i_pattern, show_symbols
+            self.data, self.series_labels, self._patterns, i_pattern, show_symbols
         )
